@@ -91,15 +91,23 @@ export function ContentStudio({ initialUser, signInPath }: { initialUser: AppUse
     event.preventDefault();
     setBusy(true);
     setAuthError("");
-    const response = await fetch(`/api/auth/${authMode}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(authForm),
-    });
-    const data = await response.json() as { error?: string };
-    setBusy(false);
-    if (!response.ok) return setAuthError(data.error ?? "操作失败，请稍后重试");
-    window.location.reload();
+    try {
+      const response = await fetch(`/api/auth/${authMode}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(authForm),
+      });
+      const data = await response.json().catch(() => ({})) as { error?: string };
+      if (!response.ok) {
+        setAuthError(data.error ?? "服务暂时不可用，请稍后重试");
+        return;
+      }
+      window.location.reload();
+    } catch {
+      setAuthError("网络连接异常，请检查网络后重试");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function signOut() {

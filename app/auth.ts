@@ -5,6 +5,7 @@ import { createSession, deleteSession, ensureUser, getSessionUser, type Role } f
 
 const SESSION_COOKIE = "motai_session";
 const SESSION_SECONDS = 60 * 60 * 24 * 30;
+const PASSWORD_HASH_ITERATIONS = 100_000;
 const encoder = new TextEncoder();
 
 export type AppUser = {
@@ -28,7 +29,7 @@ function fromBase64Url(value: string) {
 
 export async function hashPassword(password: string, salt = toBase64Url(crypto.getRandomValues(new Uint8Array(16)))) {
   const key = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
-  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: fromBase64Url(salt), iterations: 210_000 }, key, 256);
+  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: fromBase64Url(salt), iterations: PASSWORD_HASH_ITERATIONS }, key, 256);
   return { hash: toBase64Url(new Uint8Array(bits)), salt };
 }
 

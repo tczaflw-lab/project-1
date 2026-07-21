@@ -1,10 +1,8 @@
 import { NextResponse } from "next/server";
-import { getChatGPTUser } from "@/app/chatgpt-auth";
-import { ensureUser } from "@/db/content";
+import { getCurrentUser } from "@/app/auth";
 
 export async function GET() {
-  const user = await getChatGPTUser();
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  const role = await ensureUser(user);
-  return NextResponse.json({ user: { ...user, role } });
+  return NextResponse.json({ user });
 }

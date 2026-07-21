@@ -1,18 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { ChatGPTUser } from "./chatgpt-auth";
+import type { AppUser } from "./auth";
 
 type Role = "admin" | "editor";
 type PostStatus = "draft" | "published";
 type Post = { id: string; title: string; excerpt: string; content: string; status: PostStatus; authorEmail: string; authorName: string; createdAt: string; updatedAt: string };
 type Member = { email: string; displayName: string; role: Role; createdAt: string };
-type Session = ChatGPTUser & { role: Role };
+type Session = AppUser;
 type View = "content" | "admin";
+type AuthMode = "login" | "register";
 
 const emptyDraft = { title: "", excerpt: "", content: "", status: "draft" as PostStatus };
 
-export function ContentStudio({ initialUser, signInPath }: { initialUser: ChatGPTUser | null; signInPath: string }) {
+export function ContentStudio({ initialUser, signInPath }: { initialUser: AppUser | null; signInPath: string }) {
   const [session, setSession] = useState<Session | null>(null);
   const [posts, setPosts] = useState<Post[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
@@ -22,6 +23,9 @@ export function ContentStudio({ initialUser, signInPath }: { initialUser: ChatGP
   const [showEditor, setShowEditor] = useState(false);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState("");
+  const [authMode, setAuthMode] = useState<AuthMode>("login");
+  const [authForm, setAuthForm] = useState({ email: "", password: "", displayName: "" });
+  const [authError, setAuthError] = useState("");
 
   const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(""), 2600); };
 
@@ -83,21 +87,62 @@ export function ContentStudio({ initialUser, signInPath }: { initialUser: ChatGP
     await loadWorkspace();
   }
 
+  async function submitAuth(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setAuthError("");
+    const response = await fetch(`/api/auth/${authMode}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(authForm),
+    });
+    const data = await response.json() as { error?: string };
+    setBusy(false);
+    if (!response.ok) return setAuthError(data.error ?? "操作失败，请稍后重试");
+    window.location.reload();
+  }
+
+  async function signOut() {
+    if (initialUser?.provider === "chatgpt") {
+      window.location.href = "/signout-with-chatgpt?return_to=/";
+      return;
+    }
+    await fetch("/api/auth/logout", { method: "POST" });
+    window.location.reload();
+  }
+
   if (!initialUser) {
     return <div className="app-shell">
-      <header className="topbar"><div className="brand"><span className="brand-mark">墨</span>墨台</div><a className="button button-primary" href={signInPath}>使用 ChatGPT 登录</a></header>
-      <main className="hero">
-        <div className="eyebrow">Content operations, simplified</div>
-        <h1>让每一份内容，<br />从想法走向发布。</h1>
-        <p className="hero-copy">墨台是一套轻量而完整的内容管理工作台。登录后即可创建草稿、协作编辑、统一发布，并通过管理员后台管理团队权限。</p>
-        <div className="hero-actions"><a className="button button-primary" href={signInPath}>开始使用</a><a className="button button-ghost" href="#capabilities">查看功能</a></div>
-        <div className="metric-row" id="capabilities"><div className="metric"><strong>01</strong><span>安全身份登录</span></div><div className="metric"><strong>02</strong><span>内容全生命周期</span></div><div className="metric"><strong>03</strong><span>细粒度角色权限</span></div></div>
+      <header className="topbar"><div className="brand"><span className="brand-mark">墨</span>墨台</div><a className="button button-primary" href="#login">邮箱登录</a></header>
+      <main className="hero auth-hero">
+        <section className="hero-intro">
+          <div className="eyebrow">Content operations, simplified</div>
+          <h1>让每一份内容，<br />从想法走向发布。</h1>
+          <p className="hero-copy">墨台是一套轻量而完整的内容管理工作台。使用任何常用邮箱注册后，即可创建草稿、统一发布，并通过管理员后台管理团队权限。</p>
+          <div className="hero-actions"><a className="button button-primary" href="#login">开始使用</a><a className="button button-ghost" href="#capabilities">查看功能</a></div>
+        </section>
+        <aside className="auth-card" id="login" aria-label="账户登录">
+          <div className="auth-tabs" role="tablist"><button className={authMode === "login" ? "active" : ""} onClick={() => { setAuthMode("login"); setAuthError(""); }}>登录</button><button className={authMode === "register" ? "active" : ""} onClick={() => { setAuthMode("register"); setAuthError(""); }}>注册</button></div>
+          <h2>{authMode === "login" ? "欢迎回来" : "创建墨台账户"}</h2>
+          <p>{authMode === "login" ? "使用你的邮箱和密码进入工作台。" : "支持 QQ、163、Gmail、Outlook 及企业邮箱。"}</p>
+          <form className="auth-form" onSubmit={(event) => void submitAuth(event)}>
+            {authMode === "register" && <div className="field"><label htmlFor="displayName">昵称</label><input id="displayName" autoComplete="name" value={authForm.displayName} onChange={(event) => setAuthForm({ ...authForm, displayName: event.target.value })} placeholder="你的称呼" required minLength={2} maxLength={40} /></div>}
+            <div className="field"><label htmlFor="email">邮箱</label><input id="email" type="email" autoComplete="email" value={authForm.email} onChange={(event) => setAuthForm({ ...authForm, email: event.target.value })} placeholder="name@example.com" required /></div>
+            <div className="field"><label htmlFor="password">密码</label><input id="password" type="password" autoComplete={authMode === "login" ? "current-password" : "new-password"} value={authForm.password} onChange={(event) => setAuthForm({ ...authForm, password: event.target.value })} placeholder={authMode === "login" ? "输入密码" : "至少 8 个字符"} required minLength={8} maxLength={72} /></div>
+            {authError && <div className="auth-error" role="alert">{authError}</div>}
+            <button className="button button-primary auth-submit" type="submit" disabled={busy}>{busy ? "请稍候…" : authMode === "login" ? "登录工作台" : "注册并登录"}</button>
+          </form>
+          <div className="auth-divider"><span>或</span></div>
+          <a className="button button-ghost auth-submit" href={signInPath}>使用 ChatGPT 登录</a>
+          <small>登录即表示你同意安全保存必要的账户与会话信息。</small>
+        </aside>
+        <div className="metric-row" id="capabilities"><div className="metric"><strong>01</strong><span>邮箱或 ChatGPT 登录</span></div><div className="metric"><strong>02</strong><span>内容全生命周期</span></div><div className="metric"><strong>03</strong><span>细粒度角色权限</span></div></div>
       </main>
     </div>;
   }
 
   return <div className="app-shell">
-    <header className="topbar"><div className="brand"><span className="brand-mark">墨</span>墨台</div><div className="nav-actions"><span className="badge badge-published">已安全登录</span><a className="button button-ghost button-small" href="/signout-with-chatgpt?return_to=/">退出</a></div></header>
+    <header className="topbar"><div className="brand"><span className="brand-mark">墨</span>墨台</div><div className="nav-actions"><span className="badge badge-published">{initialUser.provider === "email" ? "邮箱账户" : "ChatGPT 账户"}</span><button className="button button-ghost button-small" onClick={() => void signOut()}>退出</button></div></header>
     <div className="workspace">
       <aside className="sidebar">
         <div className="profile"><div className="avatar">{initialUser.displayName.slice(0, 1).toUpperCase()}</div><strong>{initialUser.displayName}</strong><span>{initialUser.email}</span></div>

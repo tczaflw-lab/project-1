@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getChatGPTUser } from "@/app/chatgpt-auth";
-import { deletePost, ensureUser, getPostOwner, updatePost, type PostStatus } from "@/db/content";
+import { getCurrentUser } from "@/app/auth";
+import { deletePost, getPostOwner, updatePost, type PostStatus } from "@/db/content";
 
 async function authorize(id: string) {
-  const user = await getChatGPTUser();
+  const user = await getCurrentUser();
   if (!user) return null;
-  const role = await ensureUser(user);
   const owner = await getPostOwner(id);
-  if (!owner || (owner.authorEmail !== user.email && role !== "admin")) return null;
+  if (!owner || (owner.authorEmail !== user.email && user.role !== "admin")) return null;
   return user;
 }
 

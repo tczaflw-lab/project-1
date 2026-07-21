@@ -16,6 +16,8 @@ export async function ensureSchema() {
       email TEXT PRIMARY KEY,
       display_name TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'editor' CHECK(role IN ('admin','editor')),
+      password_hash TEXT,
+      password_salt TEXT,
       created_at TEXT NOT NULL
     )`),
     database.prepare(`CREATE TABLE IF NOT EXISTS posts (
@@ -32,7 +34,25 @@ export async function ensureSchema() {
     )`),
     database.prepare("CREATE INDEX IF NOT EXISTS posts_author_idx ON posts(author_email)"),
     database.prepare("CREATE INDEX IF NOT EXISTS posts_status_idx ON posts(status)"),
+    database.prepare(`CREATE TABLE IF NOT EXISTS sessions (
+      token_hash TEXT PRIMARY KEY,
+      user_email TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(user_email) REFERENCES users(email) ON DELETE CASCADE
+    )`),
+    database.prepare("CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions(user_email)"),
+    database.prepare("CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions(expires_at)"),
+    database.prepare(`CREATE TABLE IF NOT EXISTS login_attempts (
+      email TEXT PRIMARY KEY,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      window_started_at TEXT NOT NULL
+    )`),
   ]);
+  const columns = await database.prepare("PRAGMA table_info(users)").all<{ name: string }>();
+  const names = new Set(columns.results.map((column: { name: string }) => column.name));
+  if (!names.has("password_hash")) await database.prepare("ALTER TABLE users ADD COLUMN password_hash TEXT").run();
+  if (!names.has("password_salt")) await database.prepare("ALTER TABLE users ADD COLUMN password_salt TEXT").run();
 }
 
 export async function ensureUser(user: ChatGPTUser): Promise<Role> {
@@ -47,6 +67,72 @@ export async function ensureUser(user: ChatGPTUser): Promise<Role> {
   const role: Role = Number(count?.count ?? 0) === 0 ? "admin" : "editor";
   await database.prepare("INSERT INTO users (email, display_name, role, created_at) VALUES (?, ?, ?, ?)").bind(user.email, user.displayName, role, new Date().toISOString()).run();
   return role;
+}
+
+export async function createPasswordUser(email: string, displayName: string, passwordHash: string, passwordSalt: string) {
+  await ensureSchema();
+  const existing = await db().prepare("SELECT email FROM users WHERE email = ?").bind(email).first();
+  if (existing) return false;
+  const count = await db().prepare("SELECT COUNT(*) AS count FROM users").first<{ count: number }>();
+  const role: Role = Number(count?.count ?? 0) === 0 ? "admin" : "editor";
+  await db().prepare(`INSERT INTO users (email, display_name, role, password_hash, password_salt, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)`)
+    .bind(email, displayName, role, passwordHash, passwordSalt, new Date().toISOString()).run();
+  return true;
+}
+
+export async function getPasswordUser(email: string) {
+  await ensureSchema();
+  return db().prepare(`SELECT email, display_name AS displayName, role, password_hash AS passwordHash,
+    password_salt AS passwordSalt FROM users WHERE email = ?`).bind(email).first<{
+      email: string; displayName: string; role: Role; passwordHash: string | null; passwordSalt: string | null;
+    }>();
+}
+
+export async function createSession(tokenHash: string, email: string, expiresAt: string) {
+  await ensureSchema();
+  await db().prepare("DELETE FROM sessions WHERE expires_at <= ?").bind(new Date().toISOString()).run();
+  await db().prepare("INSERT INTO sessions (token_hash, user_email, expires_at, created_at) VALUES (?, ?, ?, ?)")
+    .bind(tokenHash, email, expiresAt, new Date().toISOString()).run();
+}
+
+export async function getSessionUser(tokenHash: string) {
+  await ensureSchema();
+  return db().prepare(`SELECT u.email, u.display_name AS displayName, u.role
+    FROM sessions s JOIN users u ON u.email = s.user_email
+    WHERE s.token_hash = ? AND s.expires_at > ?`).bind(tokenHash, new Date().toISOString()).first<{
+      email: string; displayName: string; role: Role;
+    }>();
+}
+
+export async function deleteSession(tokenHash: string) {
+  await ensureSchema();
+  await db().prepare("DELETE FROM sessions WHERE token_hash = ?").bind(tokenHash).run();
+}
+
+export async function checkLoginLimit(email: string) {
+  await ensureSchema();
+  const record = await db().prepare("SELECT attempts, window_started_at AS windowStartedAt FROM login_attempts WHERE email = ?")
+    .bind(email).first<{ attempts: number; windowStartedAt: string }>();
+  if (!record) return true;
+  const expired = Date.now() - new Date(record.windowStartedAt).getTime() > 15 * 60 * 1000;
+  return expired || Number(record.attempts) < 6;
+}
+
+export async function recordLoginFailure(email: string) {
+  await ensureSchema();
+  const now = new Date();
+  const record = await db().prepare("SELECT attempts, window_started_at AS windowStartedAt FROM login_attempts WHERE email = ?")
+    .bind(email).first<{ attempts: number; windowStartedAt: string }>();
+  const expired = !record || now.getTime() - new Date(record.windowStartedAt).getTime() > 15 * 60 * 1000;
+  await db().prepare(`INSERT INTO login_attempts (email, attempts, window_started_at) VALUES (?, ?, ?)
+    ON CONFLICT(email) DO UPDATE SET attempts = excluded.attempts, window_started_at = excluded.window_started_at`)
+    .bind(email, expired ? 1 : Number(record.attempts) + 1, expired ? now.toISOString() : record.windowStartedAt).run();
+}
+
+export async function clearLoginFailures(email: string) {
+  await ensureSchema();
+  await db().prepare("DELETE FROM login_attempts WHERE email = ?").bind(email).run();
 }
 
 export async function listPosts(scope: "published" | "mine" | "all", email?: string) {
